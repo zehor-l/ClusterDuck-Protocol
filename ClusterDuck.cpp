@@ -1,11 +1,20 @@
 #include "ClusterDuck.h"
 
-U8X8_SSD1306_128X64_NONAME_SW_I2C u8x8(/* clock=*/ CDPCFG_PIN_OLED_CLOCK, /* data=*/ CDPCFG_PIN_OLED_DATA, /* reset=*/ CDPCFG_PIN_OLED_RESET);
+#ifdef CDPCFG_OLED_CLASS
+  CDPCFG_OLED_CLASS u8x8(/* clock=*/ CDPCFG_PIN_OLED_CLOCK, /* data=*/ CDPCFG_PIN_OLED_DATA, /* reset=*/ CDPCFG_PIN_OLED_RESET);
+#endif
+
+#ifdef CDPCFG_PIN_LORA_SPI_SCK
+  #include "SPI.h"
+  SPIClass _spi;
+  SPISettings _spiSettings;
+  CDPCFG_LORA_CLASS lora = new Module(CDPCFG_PIN_LORA_CS, CDPCFG_PIN_LORA_DIO0, CDPCFG_PIN_LORA_RST, CDPCFG_PIN_LORA_DIO1, _spi, _spiSettings);
+#else
+  CDPCFG_LORA_CLASS lora = new Module(CDPCFG_PIN_LORA_CS, CDPCFG_PIN_LORA_DIO0, CDPCFG_PIN_LORA_RST, CDPCFG_PIN_LORA_DIO1);
+#endif
 
 IPAddress apIP(CDPCFG_AP_IP1, CDPCFG_AP_IP2, CDPCFG_AP_IP3, CDPCFG_AP_IP4);
 AsyncWebServer webServer(CDPCFG_WEB_PORT);
-
-SX1276 lora = new Module(CDPCFG_PIN_LORA_CS, CDPCFG_PIN_LORA_DIO0, CDPCFG_PIN_LORA_RST, CDPCFG_PIN_LORA_DIO1);
 
 auto tymer = timer_create_default();
 
@@ -20,7 +29,7 @@ String ClusterDuck::_deviceId = "";
 bool restartRequired = false;
 size_t content_len;
 
-//Username and password for /update 
+//Username and password for /update
 const char* http_username = CDPCFG_UPDATE_USERNAME;
 const char* http_password = CDPCFG_UPDATE_PASSWORD;
 
@@ -41,9 +50,26 @@ void ClusterDuck::begin(int baudRate) {
 }
 
 void ClusterDuck::setupDisplay(String deviceType)  {
+#ifndef CDPCFG_OLED_NONE
   u8x8.begin();
   u8x8.setFont(u8x8_font_chroma48medium8_r);
 
+#ifdef CDPCFG_OLED_64x32
+  // small display 64x32
+  u8x8.setCursor(0, 2);
+  u8x8.print("((>.<))");
+
+  u8x8.setCursor(0, 4);
+  u8x8.print("DT: " + deviceType);
+
+  u8x8.setCursor(0, 5);
+  u8x8.print("ID: " + _deviceId);
+
+//  u8x8.setCursor(0, 4);
+//  u8x8.print("ST: Online");
+
+#else
+  // default display size 128x64
   u8x8.setCursor(0, 1);
   u8x8.print("    ((>.<))    ");
 
@@ -61,24 +87,32 @@ void ClusterDuck::setupDisplay(String deviceType)  {
 
   u8x8.setCursor(0, 7);
   u8x8.print(duckMac(false));
+#endif
+#endif
 }
 
 // Initial LoRa settings
 void ClusterDuck::setupLoRa(long BAND, int SS, int RST, int DI0, int DI1, int TxPower) {
-  //LoRa.setSignalBandwidth(62.5E3);
 
+#ifdef CDPCFG_PIN_LORA_SPI_SCK
+  log_n("_spi.begin(CDPCFG_PIN_LORA_SPI_SCK, CDPCFG_PIN_LORA_SPI_MISO, CDPCFG_PIN_LORA_SPI_MOSI, CDPCFG_PIN_LORA_CS)");
+  _spi.begin(CDPCFG_PIN_LORA_SPI_SCK, CDPCFG_PIN_LORA_SPI_MISO, CDPCFG_PIN_LORA_SPI_MOSI, CDPCFG_PIN_LORA_CS);
+  lora = new Module(SS, DI0, RST, DI1, _spi, _spiSettings);
+#else
   lora = new Module(SS, DI0, RST, DI1);
+#endif
 
   Serial.println("Starting LoRa......");
-
-  int state = lora.begin(); //TODO: Make more modular -> Bandwidth, Spreading factor
+  int state = lora.begin();
 
   //Initialize LoRa
   if (state == ERR_NONE) {
     Serial.println("LoRa online, Quack!");
   } else {
+#ifndef CDPCFG_OLED_NONE
     u8x8.clear();
     u8x8.drawString(0, 0, "Starting LoRa failed!");
+#endif
     Serial.print("Starting LoRa Failed!!!");
     Serial.println(state);
     restartDuck();
@@ -176,9 +210,9 @@ void ClusterDuck::setupWebServer(bool createCaptivePortal) {
      webServer.on("/update", HTTP_GET, [&](AsyncWebServerRequest *request){
                if(!request->authenticate(http_username, http_password))
                return request->requestAuthentication();
-              
+
                 AsyncWebServerResponse *response = request->beginResponse(200, "text/html", update_page);
-                
+
                 request->send(response);
             });
 
@@ -186,7 +220,7 @@ void ClusterDuck::setupWebServer(bool createCaptivePortal) {
 
 webServer.on("/update", HTTP_POST, [&](AsyncWebServerRequest *request) {
 
-              
+
                 AsyncWebServerResponse *response = request->beginResponse((Update.hasError())?500:200, "text/plain", (Update.hasError())?"FAIL":"OK");
                 response->addHeader("Connection", "close");
                 response->addHeader("Access-Control-Allow-Origin", "*");
@@ -197,26 +231,27 @@ webServer.on("/update", HTTP_POST, [&](AsyncWebServerRequest *request) {
                 if (!index) {
 
                   lora.standby();
+                  enableInterrupt = false;
                   Serial.println("Pause Lora");
                   Serial.println("startint OTA update");
-                
+
                     content_len = request->contentLength();
-                   
+
                         int cmd = (filename.indexOf("spiffs") > -1) ? U_SPIFFS : U_FLASH;
-                        if (!Update.begin(UPDATE_SIZE_UNKNOWN, cmd)) { 
-                  
-                            Update.printError(Serial);   
+                        if (!Update.begin(UPDATE_SIZE_UNKNOWN, cmd)) {
+
+                            Update.printError(Serial);
                         }
-                
+
                 }
-              
+
                 if (Update.write(data, len) != len) {
-                    Update.printError(Serial); 
+                    Update.printError(Serial);
                     lora.startReceive();
                 }
-                    
-                if (final) { 
-                    if (Update.end(true)) { 
+
+                if (final) {
+                    if (Update.end(true)) {
                       ESP.restart();
                     esp_task_wdt_init(1,true);
                     esp_task_wdt_add(NULL);
@@ -452,6 +487,9 @@ void ClusterDuck::processPortalRequest() {
 }
 
 void ClusterDuck::setupMamaDuck() {
+#ifdef CDPCFG_MESH_DEDUP_BLOOM
+  setupBloomFilters();
+#endif
   setupDisplay("Mama");
   setupLoRa();
 	setupWifiAp();
@@ -465,9 +503,91 @@ void ClusterDuck::setupMamaDuck() {
   tymer.every(CDPCFG_MILLIS_REBOOT, reboot);
 }
 
+#ifdef CDPCFG_MESH_DEDUP_BLOOM
+void ClusterDuck::setupBloomFilters() {
+  log_n("start");
+  if (_bf == NULL) {
+    log_n("alloc %i",CDPCFG_MESH_DEDUP_BLOOM_COUNT);
+    _bf = (cdp_bf_t *)calloc(CDPCFG_MESH_DEDUP_BLOOM_COUNT,sizeof(cdp_bf_t));
+  }
+  _bf_active = 0;
+  // simply cycle through the whole list to (re)init them all
+  for (int i=0; i<CDPCFG_MESH_DEDUP_BLOOM_COUNT; i++) {
+    log_n("cycle %l",i);
+    cycleBloomFilters();
+  }
+}
+
+void ClusterDuck::cycleBloomFilters() {
+  log_n("start");
+  if (_bf == NULL) {
+    return;
+  }
+  // decide next active filter
+  log_n("old active: %i",_bf_active);
+  _bf_active = (_bf_active + 1) % CDPCFG_MESH_DEDUP_BLOOM_COUNT;
+  log_n("new active: %i",_bf_active);
+  // (re)init filter
+  cdp_bf_init(CDPCFG_MESH_DEDUP_BLOOM_K, CDPCFG_MESH_DEDUP_BLOOM_M, CDPCFG_MESH_DEDUP_BLOOM_SALT, &_bf[_bf_active]);
+}
+
+bool ClusterDuck::checkBloomFilters(String msg) {
+  log_n("start");
+  // check_add to active filter
+  log_n("add bf[%d].n=%d", _bf_active, _bf[_bf_active].n);
+  bool have = cdp_bf_check_add(&_bf[_bf_active],(byte *)msg.c_str(),msg.length());
+  if (have) { // if have, return true
+    log_n("have active %d",_bf_active);
+    return true;
+  } else { // if added, check if full
+    if (_bf[_bf_active].n > CDPCFG_MESH_DEDUP_BLOOM_MAXN) {
+      // if full rotate and return false
+      cycleBloomFilters();
+      log_n("dont cycled");
+      return false;
+    }
+    log_n("dont n=%d", _bf[_bf_active].n);
+  }
+  // check passive filters
+  for (int i=(_bf_active+CDPCFG_MESH_DEDUP_BLOOM_COUNT-1)%CDPCFG_MESH_DEDUP_BLOOM_COUNT; i!=_bf_active; i=(i+CDPCFG_MESH_DEDUP_BLOOM_COUNT-1)%CDPCFG_MESH_DEDUP_BLOOM_COUNT) {
+    // if have, return true
+    log_n("chk bf[%d].n=%d", i, _bf[i].n);
+    if (cdp_bf_check(&_bf[i],(byte *)msg.c_str(),msg.length())) {
+      log_n("have passive %d",i);
+      return true;
+    }
+  }
+  // no matches found: return false
+  log_n("dont final");
+  return false;
+}
+#endif // CDPCFG_MESH_DEDUP_BLOOM
+
+bool ClusterDuck::checkRelayPacket() {
+  bool op = false;
+#ifdef CDPCFG_MESH_DEDUP_PATH
+  bool op1 = op = !idInPath(_lastPacket.path);
+#endif // CDPCFG_MESH_DEDUP_PATH
+#ifdef CDPCFG_MESH_DEDUP_BLOOM
+  bool op2 = op = !checkBloomFilters(_lastPacket.senderId + "::" +
+                                    _lastPacket.messageId + "::" +
+                                    _lastPacket.payload);
+#endif // CDPCFG_MESH_DEDUP_BLOOM
+#if defined(CDPCFG_MESH_DEDUP_PATH) && defined(CDPCFG_MESH_DEDUP_BLOOM)
+  // relay only if both strategies allow relaying
+  op = op1 && op2;
+  if (op1 != op2) {
+    log_e("MISMATCH: path=%d bloom=%d res=%d", op1, op2, op);
+  }
+#endif // PATH + BLOOM
+  return op;
+}
+
 void ClusterDuck::runMamaDuck() {
   ArduinoOTA.handle();
-  tymer.tick();
+  if (enableInterrupt) {
+    tymer.tick();
+  }
 
   if(receivedFlag) {  //If LoRa packet received
     receivedFlag = false;
@@ -478,7 +598,7 @@ void ClusterDuck::runMamaDuck() {
     if(pSize > 0) {
       String msg = getPacketData(pSize);
       packetIndex = 0;
-      if(msg != "ping" && !idInPath(_lastPacket.path)) {
+      if(msg != "ping" && checkRelayPacket()) {
         Serial.println("runMamaDuck relayPacket");
         sendPayloadStandard(_lastPacket.payload, _lastPacket.senderId, _lastPacket.messageId, _lastPacket.path);
         memset(transmission, 0x00, CDPCFG_CDP_BUFSIZE); //Reset transmission
@@ -503,7 +623,7 @@ void ClusterDuck::runMamaDuck() {
 String tohex(byte *data, int size) {
   String buf = "";
   buf.reserve(size*2);
-  char *cs = "0123456789abcdef";
+  const char *cs = "0123456789abcdef";
   for (int i=0; i<size; i++) {
     byte val = data[i];
     buf += cs[(val>>4) & 0x0f];
@@ -636,12 +756,10 @@ String ClusterDuck::getPacketData(int pSize) {
   }
   packetIndex = 0;
   int len = 0;
-  byte byteCode;
   bool sId = false;
   bool mId = false;
   bool pLoad = false;
   bool pth = false;
-  bool ping = false;
   String msg = "";
   bool gotLen = false;
 
@@ -939,8 +1057,8 @@ void ClusterDuck::setupLED() {
   ledcAttachPin(ledR, 1); // assign RGB led pins to channels
   ledcAttachPin(ledG, 2);
   ledcAttachPin(ledB, 3);
-  
-// Initialize channels 
+
+// Initialize channels
 // channels 0-15, resolution 1-16 bits, freq limits depend on resolution
 // ledcSetup(uint8_t channel, uint32_t freq, uint8_t resolution_bits);
   ledcSetup(1, 12000, 8); // 12 kHz PWM, 8-bit resolution
@@ -952,7 +1070,7 @@ void ClusterDuck::setColor(int red, int green, int blue)
 {
   ledcWrite(1, red);
   ledcWrite(2, green);
-  ledcWrite(3, blue);  
+  ledcWrite(3, blue);
 }
 
 DNSServer ClusterDuck::dnsServer;
@@ -981,3 +1099,9 @@ byte ClusterDuck::iamhere_B    = 0xF8;
 byte ClusterDuck::path_B       = 0xF3;
 
 String ClusterDuck::portal = MAIN_page;
+
+#ifdef CDPCFG_MESH_DEDUP_BLOOM
+cdp_bf_t *ClusterDuck::_bf;
+byte ClusterDuck::_bf_active;
+#endif
+
