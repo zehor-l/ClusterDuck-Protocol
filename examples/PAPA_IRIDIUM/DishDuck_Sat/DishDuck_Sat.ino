@@ -4,8 +4,11 @@
 #include <ArduinoJson.h>
 #include "timer.h"
 ClusterDuck duck;
+
 auto timer = timer_create_default(); // create a timer with default settings
+
 byte ping = 0xF4;
+//============== IRIDIUM Setup ================
 #define IridiumSerial Serial2
 #define DIAGNOSTICS false// Change this to see diagnostics
 #define rxpin 25
@@ -13,6 +16,7 @@ byte ping = 0xF4;
 
 // Declare the IridiumSBD object
 IridiumSBD modem(IridiumSerial);
+//============== IRIDIUM Setup ================
 
 void setup() {
   // put your setup code here, to run once:
@@ -60,7 +64,7 @@ void quackJson() {
   }
   else
   {
-    Serial.println("Hey, it worked!");
+    Serial.println("Message Sent to Iridium!");
   }
  
 }
@@ -81,7 +85,8 @@ void setupRockBlock(){
       Serial.println("No modem detected: check wiring.");
     return;
   }
-  // Example: Print the firmware revision
+
+  //============== Print Firmware Version ================
   char version[12];
   err = modem.getFirmwareVersion(version, sizeof(version));
   if (err != ISBD_SUCCESS)
@@ -96,5 +101,5 @@ void setupRockBlock(){
   Serial.print(version);
   Serial.println(".");
   }
-  
+//============== Print Firmware Version ================ 
 }

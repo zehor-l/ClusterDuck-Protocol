@@ -14,7 +14,6 @@
 #define TOKEN       ""
 
 char server[]           = ORG ".messaging.internetofthings.ibmcloud.com";
-char topic[]            = "iot-2/evt/status/fmt/json";
 char authMethod[]       = "use-token-auth";
 char token[]            = TOKEN;
 char clientId[]         = "d:" ORG ":" DEVICE_TYPE ":" DEVICE_ID;
@@ -27,6 +26,7 @@ WiFiClientSecure wifiClient;
 PubSubClient client(server, 8883, wifiClient);
 
 byte ping = 0xF4;
+bool retry = true;
 
 void setup() {
   // put your setup code here, to run once:
@@ -49,14 +49,20 @@ void setup() {
 
 void loop() {
   // put your main code here, to run repeatedly:
-  if(WiFi.status() != WL_CONNECTED)
+  if(WiFi.status() != WL_CONNECTED && retry)
   {
     Serial.print("WiFi disconnected, reconnecting to local network: ");
     Serial.print(duck.getSSID());
-    duck.setupInternet(duck.getSSID(), duck.getPassword());
-		duck.setupDns();
+    if(duck.ssidAvailable()) {
+      duck.setupInternet(duck.getSSID(), duck.getPassword());
+		  duck.setupDns();
+    } else {
+      retry = false;
+      timer.in(5000, enableRetry);
+    }
+    
   }
-  setupMQTT();
+  if(WiFi.status() == WL_CONNECTED) setupMQTT();
 
   if(duck.getFlag()) {  //If LoRa packet received
     duck.flipFlag();
@@ -87,6 +93,7 @@ void setupMQTT()
     }
   }
 }
+
 void quackJson() {
   const int bufferSize = 4*  JSON_OBJECT_SIZE(4);
   StaticJsonDocument<bufferSize> doc;
@@ -100,6 +107,13 @@ void quackJson() {
   doc["Payload"]     .set(lastPacket.payload);
   doc["path"]         .set(lastPacket.path + "," + duck.getDeviceId());
 
+  String loc = "iot-2/evt/"+ lastPacket.topic +"/fmt/json";
+  Serial.print(loc);
+  // add space for null char
+  int len = loc.length() + 1;
+
+  char topic[len];
+  loc.toCharArray(topic, len);
 
   String jsonstat;
   serializeJson(doc, jsonstat);
@@ -115,4 +129,8 @@ void quackJson() {
     Serial.println("Publish failed");
   }
 
+}
+
+bool enableRetry(void *) {
+  retry = true;
 }
