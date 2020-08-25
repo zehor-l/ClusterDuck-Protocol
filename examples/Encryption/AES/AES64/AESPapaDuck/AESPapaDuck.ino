@@ -116,7 +116,12 @@ void quackJson() {
   uint16_t dlen = lastPacket.payload.length();
   sprintf(ciphertext, "%s", lastPacket.payload.c_str());
   String decrypted = decrypt(ciphertext, dlen, dec_iv);
+  Serial.println(decrypted);
 
+  for (int i = 0; i < 16; i++) {
+    dec_iv[i] = 0;
+  }
+  
   doc["DeviceID"]        = lastPacket.senderId;
   doc["MessageID"]       = lastPacket.messageId;
   doc["Payload"]     .set(decrypted);
