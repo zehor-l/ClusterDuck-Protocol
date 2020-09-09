@@ -1,74 +1,62 @@
-#include <Arduino.h>
-#include <SPI.h>
-#include <LoRa.h>
-#include <U8x8lib.h>
+//#include "timer.h"
+#include <ClusterDuck.h>
 
-U8X8_SSD1306_128X64_NONAME_SW_I2C u8x8(/* clock=*/ 15, /* data=*/ 4, /* reset=*/ 16);
-unsigned long DELAY_TIME = 10000; // 1.5 sec
-unsigned long delayStart = 0; // the time the delay started
-bool delayRunning = false; // true if still waiting for delay to finish
-
-#define SS      18
-#define RST     14
-#define DI0     26
-#define BAND    915E6
-
-void setupDisplay()
-{
-  u8x8.begin();
-  u8x8.setFont(u8x8_font_chroma48medium8_r);
-}
+ClusterDuck duck;
 
 void setup() {
-  // put your setup code here, to run once:
-  Serial.begin(115200);
-  Serial.println("MobileDuck M01");
-  setupLoRa();
-  setupDisplay();
   
-  u8x8.drawString(0, 1, "MobileDuck M01");
-    
-  delayStart = millis();   // start delay
-  delayRunning = true; // not finished yet
+  duck.begin();
+  duck.setDeviceId("M01");
+  duck.setupDisplay("Mama");
+  duck.setupLoRa();
+
+  //Sets up wifi access point
+  duck.setupWifiAp();
+
+  //Setup DNS and IP
+  duck.setupDns();
+
+  //Setup web server and captive portal
+  duck.setupWebServer(true);
+
+  //Initialize ArduinoOTA for over the air updates
+  duck.setupOTA();
+
+  Serial.println("MamaDuck Online");
 }
 
 void loop() {
-  int packetSize = LoRa.parsePacket();
-  if (packetSize > 0) {
-    Serial.println("Ping Received");
-    int rssi = LoRa.packetRssi();
-    String fromWho = LoRa.readString();
-    if (fromWho.length() == 3) {
-      String payMe = "M01:" + fromWho + ":" + rssi;
-//      Serial.println("Ping Received");
-//      delay(1500);
-//      Serial.println("Ping Sent");
-      LoRa.beginPacket();
-      LoRa.print(payMe);
-      LoRa.endPacket();
-      Serial.println(payMe);
-      esp_restart();
-    }
-  }
-}
+  if(duck.getFlag()) {
 
-// Initial LoRa settings
-void setupLoRa()
-{
-  SPI.begin(5, 19, 27, 18);
-  LoRa.setPins(SS, RST, DI0);
-  LoRa.setTxPower(20);
-  //LoRa.setSignalBandwidth(62.5E3);
-  //Initialize LoRa
-  if (!LoRa.begin(BAND))
-  {
-    Serial.println("Starting LoRa failed!");
-    while (1);
-  }
-  else
-  {
-    Serial.println("LoRa On");
-  }
-  //  LoRa.setSyncWord(0xF3);         // ranges from 0-0xFF, default 0x34
-  LoRa.enableCrc();             // Activate crc
+    //Flip lora flag for next message
+    duck.flipFlag(); 
+
+    //Flip interrupt to false
+    duck.flipInterrupt(); 
+
+    //Read and store lora packet
+    int pSize = duck.handlePacket(); 
+    Serial.print("runMamaDuck pSize ");
+    Serial.println(pSize);
+
+    //Make sure the packet has data
+    if(pSize > 0) { 
+      
+      String msg = duck.getPacketData(pSize); 
+
+      Packet lastPacket = duck.getLastPacket(); 
+
+      //If packet is from StationaryDuck, then send RSSI data
+      if(lastPacket.payload == "Here") {
+        duck.sendPayloadStandard(String(duck.getRSSI()), "rssi", lastPacket.senderId, lastPacket.messageId, lastPacket.path); 
+      }
+     }
+     
+    //Flip interrupt to true
+    duck.flipInterrupt(); 
+    Serial.println("runMamaDuck startReceive");
+
+    //Turn on Receiver
+    duck.startReceive(); 
+   }
 }
